@@ -1,0 +1,8 @@
+numpy==2.2.6
+scipy==1.15.2
+sounddevice==0.5.2
+pylsl==1.17.6
+pyliblo3==0.16.3
+matplotlib==3.10.3
+pyqtgraph==0.13.7
+PyQt5==5.15.9
