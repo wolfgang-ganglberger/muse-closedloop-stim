@@ -53,9 +53,21 @@ def regularize_timestamps(data, fs, gap_thresh=0.25):
     ts_uniform   = np.concatenate(out_t)
     data_uniform = np.vstack(out_dat)
     
+    # simple plot: old and new timestamps.
+    x_axis = np.arange(len(ts_raw))
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(8, 3))
+    plt.plot(x_axis, ts_raw, label='Original timestamps', alpha=0.7)
+    plt.plot(np.arange(len(ts_uniform)), ts_uniform, label='Regularized timestamps', alpha=0.7)
+    plt.xlabel('Sample index')
+    plt.ylabel('Time (s)')
+    plt.title('Timestamp Regularization')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
     # assert ts is uniformly spaced:
     if not np.allclose(np.diff(ts_uniform), dt_nom, rtol=1e-6, atol=1e-8):
-        raise ValueError("Timestamps are not uniformly spaced.")
+        raise ValueError(f"Timestamps are not uniformly spaced. Max dt error: {np.max(np.abs(np.diff(ts_uniform) - dt_nom))}")
 
     # We have asserted timestamps are correctly uniformly spaced, let's ensure they are exactly/precisely spaced:
     ts_uniform = ts_uniform[0] + np.arange(len(ts_uniform)) * dt_nom
