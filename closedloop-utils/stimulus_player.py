@@ -14,7 +14,13 @@ Contains 1) audio tone / stimulus builders; 2) audio worker class for playback a
 # ----------------------------------------------------------------------
 # AUDIO OUTPUT/TONE VARIANTS ------------------------------------------------
 
-def pink_noise(n_samples: int, rms: float = 0.05, rng: np.random.Generator | None = None):
+from scipy.signal import butter, sosfilt
+
+def highpass(x, fs, cutoff=200, order=4):
+    sos = butter(order, cutoff, btype="highpass", fs=fs, output="sos")
+    return sosfilt(sos, x)
+
+def pink_noise(n_samples: int, rms: float = 0.20, rng: np.random.Generator | None = None):
     """Voss–McCartney: add 1/f random octaves → pink noise"""
     rng = rng or np.random.default_rng()
     white = rng.standard_normal(n_samples)
@@ -22,6 +28,10 @@ def pink_noise(n_samples: int, rms: float = 0.05, rng: np.random.Generator | Non
     b, a = [0.049922035, 0.050612699, 0.050612699, 0.049922035], [1, -2.494956, 2.017265, -0.522190]
     pink = lfilter(b, a, white)
     pink = pink / np.std(pink) * rms       # normalise power
+    
+    # now highpass filter for more stable sound (at least necessary on macbook speakers):
+    pink = highpass(pink, fs=48000, cutoff=400, order=4)
+    
     return pink.astype(np.float32)
 
 def morlet_wavelet(sample_rate: int, rms: float = 0.05) -> np.ndarray:
@@ -40,6 +50,44 @@ def morlet_wavelet(sample_rate: int, rms: float = 0.05) -> np.ndarray:
     if cur > 0 and rms > 0: w = w / cur * rms
     return w.astype(np.float32)
 
+def build_stim(
+    stim_type: Literal['pink', 'morlet'],
+    stim_dur: float,
+    fs_out: int,
+    stim_rms: float,
+    stim_peak: float | None = None,
+    stim_peak_normalize: bool = False,
+    rng_seed: int = 42,
+) -> np.ndarray:
+    rng = np.random.default_rng(rng_seed) if rng_seed is not None else None
+    if stim_type == 'pink':
+        n = int(round(stim_dur * fs_out))
+        stim = pink_noise(n, rms=stim_rms, rng=rng)
+    else:  # 'morlet' (fixed params)
+        stim = morlet_wavelet(fs_out, rms=stim_rms)
+    if stim_peak is None:
+        return _apply_fade(stim, fs_out, fade_ms=5.0)
+    peak = float(np.max(np.abs(stim)))
+    if peak <= 0:
+        return _apply_fade(stim, fs_out, fade_ms=5.0)
+    if stim_peak_normalize or peak > stim_peak:
+        stim = (stim / peak) * float(stim_peak)
+    return _apply_fade(stim, fs_out, fade_ms=5.0)
+
+
+def _apply_fade(stim: np.ndarray, fs_out: int, fade_ms: float = 2.0) -> np.ndarray:
+    if fade_ms <= 0:
+        return stim
+    n_fade = int(round((fade_ms / 1000.0) * fs_out))
+    n_fade = min(n_fade, len(stim) // 2)
+    if n_fade <= 0:
+        return stim
+    ramp = np.linspace(0.0, 1.0, n_fade, dtype=stim.dtype)
+    stim = stim.copy()
+    stim[:n_fade] *= ramp
+    stim[-n_fade:] *= ramp[::-1]
+    return stim
+
 
 # ----------------------------------------------------------------------
 # Audio worker (callback) -------------------------------------------
@@ -53,11 +101,17 @@ class AudioWorker:
                  stim_type: Literal['pink','morlet'] = 'pink',
                  stim_dur: float = 0.1,
                  fs_out: int = 48_000,
-                 stim_rms: float = 0.05):
+                 stim_rms: float = 0.05,
+                 stim_peak: float | None = None,
+                 stim_peak_normalize: bool = False,
+                 rng_seed: int = 42):
         self.fs_out   = int(fs_out)
         self.stim_type = stim_type
         self.stim_dur = float(stim_dur)
         self.stim_rms = float(stim_rms)
+        self.stim_peak = stim_peak
+        self.stim_peak_normalize = bool(stim_peak_normalize)
+        self.rng_seed = rng_seed
 
         self.stim = self._make_stim()
 
@@ -77,11 +131,15 @@ class AudioWorker:
         self.stream.start()
 
     def _make_stim(self) -> np.ndarray:
-        if self.stim_type == 'pink':
-            n = int(round(self.stim_dur * self.fs_out))
-            return pink_noise(n, rms=self.stim_rms)
-        else:  # 'morlet' (fixed params)
-            return morlet_wavelet(self.fs_out, rms=self.stim_rms)
+        return build_stim(
+            stim_type=self.stim_type,
+            stim_dur=self.stim_dur,
+            fs_out=self.fs_out,
+            stim_rms=self.stim_rms,
+            stim_peak=self.stim_peak,
+            stim_peak_normalize=self.stim_peak_normalize,
+            rng_seed=self.rng_seed,
+        )
 
     def set_stim_type(self, stim_type: Literal['pink','morlet']):
         if stim_type not in ('pink','morlet'):

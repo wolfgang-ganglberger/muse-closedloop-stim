@@ -81,6 +81,30 @@ What happens:
 	•	Record EEG + markers in LabRecorder → .xdf for offline analysis
 ---
 
+## Live LSL Subscriber (monitoring/QC)
+
+Use the LSL subscriber to view or print live EEG without touching any `.xdf` files.
+
+Local machine:
+```bash
+python -m lsl_streaming.lsl_subscriber --lsl-type EEG --plot
+```
+
+Another device on the same network/VPN:
+```bash
+python -m lsl_streaming.lsl_subscriber --lsl-type EEG --lsl-name MuseEEG --plot
+```
+
+Notes:
+	•	Use `--lsl-source-id` when known (most reliable)  
+	•	Timestamps come from LSL, not the local system clock  
+	•	Avoid reading `.xdf` files while LabRecorder is still writing them  
+
+Optional test streamer (for local dev without a headset):
+```bash
+python tools/lsl_test_streamer.py --name TestEEG --type EEG --source-id test_eeg_source
+```
+
 ## Repository Layout
 
 ```
@@ -159,5 +183,4 @@ muse-closedloop-stim/
 - **Timing issues**:  
   - Use the provided timestamp correction utilities.
   - Check system latency (see comments in code).
-
 

@@ -106,6 +106,70 @@ class _EEGLSLStreamer(threading.Thread):
         self._stop.set()
 
 
+class _MetricsLSLStreamer(threading.Thread):
+    """Background thread that streams Muse‑S metrics samples into an LSL outlet."""
+    def __init__(
+        self,
+        rx: 'MuseOSCReceiver',
+        *,
+        name: str = "MuseMetrics",
+        channel_names: tuple[str, ...] = tuple(f"metric_{i:02d}" for i in range(27)),
+        fs: int = 60,
+        chunk_size: int = 10,
+        ch_slice: slice | tuple[int, ...] | None = None,
+        osc_path: str = "/muse_metrics",
+        stream_type: str = "Metrics",
+    ):
+        super().__init__(daemon=True)
+        self.rx = rx
+        self.fs = fs
+        self.chunk_size = chunk_size
+        self.channel_names = channel_names
+        self.osc_path = osc_path
+
+        self.ch_slice = ch_slice
+        if self.ch_slice is None:
+            self.ch_slice = slice(0, len(channel_names))
+        if isinstance(self.ch_slice, slice):
+            expected_cols = (self.ch_slice.stop or len(self.channel_names)) - (self.ch_slice.start or 0)
+        else:
+            expected_cols = len(self.ch_slice)
+        assert expected_cols == len(self.channel_names), (
+            "channel_names length must match number of columns selected by ch_slice"
+        )
+
+        self._stop = threading.Event()
+
+        info = StreamInfo(name, stream_type, len(self.channel_names), fs, "float32", "muse_metrics_stream")
+        chns = info.desc().append_child("channels")
+        for lab in self.channel_names:
+            ch = chns.append_child("channel")
+            ch.append_child_value("label", lab)
+        self.outlet = StreamOutlet(info, chunk_size=chunk_size, max_buffered=fs * 60)
+
+    def run(self):
+        while not self._stop.is_set():
+            buf = self.rx.get(self.osc_path, ch_slice=self.ch_slice)
+            if buf.size == 0:
+                time.sleep(0.05)
+                continue
+
+            if not hasattr(self, "_last_ts"):
+                self._last_ts = buf[-1, 0]
+
+            new_rows = buf[buf[:, 0] > self._last_ts]
+            if new_rows.shape[0] > 0:
+                data_cols = new_rows[:, 1:1+len(self.channel_names)].astype(np.float32)
+                ts_list = new_rows[:, 0].tolist()
+                self.outlet.push_chunk(data_cols.tolist(), ts_list)
+                self._last_ts = ts_list[-1]
+            else:
+                time.sleep(0.05)
+
+    def stop(self):
+        self._stop.set()
+
+
 def start_eeg_lsl_stream(rx: 'MuseOSCReceiver',
                          channel_names: tuple[str, ...] | None = None,
                          ch_slice: slice | tuple[int, ...] | None = None,
@@ -135,6 +199,23 @@ def start_eeg_lsl_stream(rx: 'MuseOSCReceiver',
     streamer.start()
     if logger is not None:
         logger.info("Started LSL streamer '%s' (%d Hz)", kwargs.get("name", "MuseEEG"), kwargs.get("fs", 256))
+    return streamer
+
+
+def start_metrics_lsl_stream(
+    rx: "MuseOSCReceiver",
+    channel_names: tuple[str, ...] | None = None,
+    ch_slice: slice | tuple[int, ...] | None = None,
+    logger: logging.Logger = None,
+    **kwargs,
+) -> _MetricsLSLStreamer:
+    """Convenience wrapper to begin streaming Muse metrics into LSL."""
+    if channel_names is None:
+        channel_names = tuple(f"metric_{i:02d}" for i in range(30))
+    streamer = _MetricsLSLStreamer(rx, channel_names=channel_names, ch_slice=ch_slice, **kwargs)
+    streamer.start()
+    if logger is not None:
+        logger.info("Started LSL streamer '%s' (%d Hz)", kwargs.get("name", "MuseMetrics"), kwargs.get("fs", 60))
     return streamer
 
 # -----------------------------------------------------------------------------

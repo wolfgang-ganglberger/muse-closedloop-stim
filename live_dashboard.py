@@ -35,6 +35,8 @@ except ImportError:  # runtime‑safe; dashboard only works if PyQtGraph present
     pg = None  # type: ignore
     QtWidgets = None  # type: ignore
 
+import sys
+sys.path.append('./closedloop-utils')
 from osc_receiver import MuseOSCReceiver, free_osc_port, start_receiver
 from osc_receiver import get_default_channel_config, collect_data, compute_sample_rates, regularise_channels
 
@@ -174,21 +176,28 @@ def launch_live_dashboard(
     win = pg.GraphicsLayoutWidget(title="Live Muse‑S Data")
     win.show()
 
-    # three stacked sub‑plots
+    # stacked sub‑plots
     eeg_plot = win.addPlot(row=0, col=0, title="EEG 4‑ch")
     ppg_plot = win.addPlot(row=1, col=0, title="PPG (IR)")
     acc_plot = win.addPlot(row=2, col=0, title="Accelerometer")
+    sqc_plot = win.addPlot(row=3, col=0, title="SQC (Muse Metrics)")
+    stage_plot = win.addPlot(row=4, col=0, title="Sleep Stage % (Muse Metrics)")
 
     win.ci.layout.setRowStretchFactor(0, 3)
     win.ci.layout.setRowStretchFactor(1, 1)
     win.ci.layout.setRowStretchFactor(2, 1)
+    win.ci.layout.setRowStretchFactor(3, 1)
+    win.ci.layout.setRowStretchFactor(4, 1)
 
     raw_eeg_names = ["TP9", "AF7", "AF8", "TP10"]
-    ch_order = [0, 3, 1, 2]  # plot in the order: AF7, AF8, TP9, TP10. I.e. Double frontal, then tempo-parietal
+    ch_order = [0, 3, 1, 2]  # plot in the order: TP9, TP10, AF7, AF8
     eeg_names = [raw_eeg_names[ch] for ch in ch_order]
     
     acc_names = ["X", "Y", "Z"]
     colors = init_colors(background="black")
+    sqc_colors = ["#9e9e9e", "#7fb3d5", "#76d7c4", "#f7dc6f"]
+    stage_names = ["Wake", "N1", "N2", "N3", "R"]
+    stage_colors = ["#f4d03f", "#a569bd", "#5dade2", "#58d68d", "#ec7063"]
     
     eeg_curves = [eeg_plot.plot(pen=pg.mkPen(colors[n]), name=n) for n in eeg_names]
     eeg_plot.addLegend(offset=(10, 10))
@@ -196,6 +205,19 @@ def launch_live_dashboard(
 
     ppg_curve = ppg_plot.plot(pen=pg.mkPen(colors["PPG IR"]))
     acc_curves = [acc_plot.plot(pen=pg.mkPen(colors[f"ACC {acc_names[ch - 1]}"])) for ch in range(1, 4)]
+    sqc_curves = [
+        sqc_plot.plot(pen=pg.mkPen(sqc_colors[i]), name=f"SQC CH{i + 1}")
+        for i in range(4)
+    ]
+    sqc_plot.addLegend(offset=(10, 10))
+    sqc_plot.setYRange(0, 100)
+
+    stage_curves = [
+        stage_plot.plot(pen=pg.mkPen(stage_colors[i]), name=stage_names[i])
+        for i in range(5)
+    ]
+    stage_plot.addLegend(offset=(10, 10))
+    stage_plot.setYRange(0, 100)
 
     try:
         while True:
@@ -225,6 +247,22 @@ def launch_live_dashboard(
                 x = t[m] - t[m][-1]
                 for ch, c in enumerate(acc_curves):
                     c.setData(x, sig[ch][m])
+
+            # Muse metrics (SQC + sleep stages)
+            metrics = rx.get(channels["metrics"]["osc_path"])
+            if metrics.size:
+                t = metrics[:, 0]
+                sig = metrics[:, 1:].T
+                m = t > (t[-1] - window_sec)
+                x = t[m] - t[m][-1]
+
+                # SQC channels 0-3 -> columns 1-4 in the metrics packet.
+                for idx, c in enumerate(sqc_curves):
+                    c.setData(x, sig[idx][m])
+
+                # Sleep stage percentages 14-18 -> columns 15-19 in the packet.
+                for idx, c in enumerate(stage_curves):
+                    c.setData(x, sig[14 + idx][m])
 
             app.processEvents()
             time.sleep(refresh_dt)
